@@ -12,33 +12,51 @@
     <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
     
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 0; background: #f4f4f9; overflow: hidden; touch-action: none; }
-        #controls { padding: 20px; text-align: center; background: white; box-shadow: 0 2px 5px rgba(0,0,0,0.1); position: relative; z-index: 10; height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center;}
-        #viewer { width: 100vw; height: 100vh; background: white; position: relative; overflow: hidden; }
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 0; background: #f4f4f9; overflow: hidden; }
         
-        /* Floating Navigation Buttons */
+        #controls { padding: 20px; text-align: center; background: white; position: relative; z-index: 10; height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center;}
+        
+        #viewer { 
+            width: 100vw; 
+            height: calc(100vh - 80px - env(safe-area-inset-bottom)); 
+            background: white; 
+            position: relative; 
+            overflow: hidden; 
+        }
+        
+        #bottom-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: calc(80px + env(safe-area-inset-bottom));
+            background: #ffffff;
+            border-top: 1px solid #e0e0e0;
+            display: none;
+            justify-content: space-evenly;
+            align-items: center;
+            padding-bottom: env(safe-area-inset-bottom);
+            z-index: 1000;
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
+        }
+
         .nav-btn {
-            position: absolute;
-            bottom: 30px;
-            width: 50px;
+            width: 120px;
             height: 50px;
-            background: rgba(44, 62, 80, 0.7);
+            background: #2c3e50;
             color: white;
             border-radius: 25px;
-            display: none; /* Hidden until book loads */
+            display: flex;
             align-items: center;
             justify-content: center;
             font-size: 24px;
-            z-index: 1000;
             cursor: pointer;
-            backdrop-filter: blur(4px);
-            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+            user-select: none;
+            -webkit-user-select: none;
         }
-        #prev-btn { left: 20px; }
-        #next-btn { right: 20px; }
-        .nav-btn:active { background: rgba(44, 62, 80, 1); transform: scale(0.95); }
+        .nav-btn:active { background: #1a252f; transform: scale(0.95); }
 
-        /* Translation Bubble */
         #translation-bubble {
             position: absolute;
             background: #2c3e50;
@@ -51,128 +69,173 @@
             opacity: 0;
             visibility: hidden;
             transition: opacity 0.2s;
-            z-index: 1000;
+            z-index: 2000;
             box-shadow: 0 5px 15px rgba(0,0,0,0.3);
             max-width: 80vw;
             text-align: center;
         }
         #translation-bubble.visible { opacity: 1; visibility: visible; }
         .loading { font-style: italic; color: #bdc3c7; }
-        input[type="file"] { font-size: 16px; padding: 10px; }
+        input[type="file"] { font-size: 16px; padding: 10px; max-width: 100%; }
+        #error-msg { color: #e74c3c; margin-top: 15px; font-weight: bold; display: none; }
     </style>
 </head>
 <body>
 
     <div id="controls">
-        <h2>📖 Swedish Reader (v4)</h2>
+        <h2 id="title-text">📖 Swedish Reader (v8)</h2>
         <input type="file" id="book-upload" accept=".epub" />
+        <div id="error-msg"></div>
     </div>
 
     <div id="viewer"></div>
     
-    <div id="prev-btn" class="nav-btn">⟨</div>
-    <div id="next-btn" class="nav-btn">⟩</div>
+    <div id="bottom-bar">
+        <div id="prev-btn" class="nav-btn">⟨</div>
+        <div id="next-btn" class="nav-btn">⟩</div>
+    </div>
 
     <div id="translation-bubble"></div>
 
     <script>
         const uploadInput = document.getElementById('book-upload');
+        const titleText = document.getElementById('title-text');
+        const errorMsg = document.getElementById('error-msg');
         const bubble = document.getElementById('translation-bubble');
         const prevBtn = document.getElementById('prev-btn');
         const nextBtn = document.getElementById('next-btn');
+        const bottomBar = document.getElementById('bottom-bar');
         let book, rendition;
 
         uploadInput.addEventListener('change', function(e) {
             const file = e.target.files[0];
+            if (!file) return;
+
+            titleText.innerText = "⏳ Loading book... please wait";
+            uploadInput.style.display = 'none';
+            errorMsg.style.display = 'none';
+
             if (window.FileReader) {
                 const reader = new FileReader();
                 reader.onload = function(event) { loadBook(event.target.result); };
-                reader.readAsArrayBuffer(file);
+                reader.onerror = function() { showError("Failed to read file from phone."); };
+                setTimeout(() => { reader.readAsArrayBuffer(file); }, 100);
             }
         });
 
-        function loadBook(bookData) {
-            document.getElementById('viewer').innerHTML = '';
-            book = ePub(bookData);
-            rendition = book.renderTo("viewer", {
-                width: "100%",
-                height: "100%",
-                spread: "none",
-                flow: "paginated",
-                manager: "default"
-            });
-            rendition.display();
-            
-            // Show the buttons!
-            prevBtn.style.display = 'flex';
-            nextBtn.style.display = 'flex';
-            document.getElementById('controls').style.display = 'none';
-
-            setupInteractions();
+        function showError(msg) {
+            titleText.innerText = "📖 Swedish Reader (v8)";
+            uploadInput.style.display = 'block';
+            errorMsg.innerText = "❌ " + msg;
+            errorMsg.style.display = 'block';
         }
 
-        // Button Click Events
-        prevBtn.addEventListener('touchstart', (e) => { e.preventDefault(); rendition.prev(); closeBubble(); });
-        nextBtn.addEventListener('touchstart', (e) => { e.preventDefault(); rendition.next(); closeBubble(); });
-        prevBtn.addEventListener('click', () => { rendition.prev(); closeBubble(); });
-        nextBtn.addEventListener('click', () => { rendition.next(); closeBubble(); });
+        function loadBook(bookData) {
+            try {
+                document.getElementById('viewer').innerHTML = '';
+                book = ePub(bookData);
+                rendition = book.renderTo("viewer", {
+                    width: "100%",
+                    height: "100%",
+                    spread: "none",
+                    flow: "paginated",
+                    manager: "default"
+                });
+                
+                rendition.display().then(() => {
+                    bottomBar.style.display = 'flex';
+                    document.getElementById('controls').style.display = 'none';
+                    setupInteractions();
+                }).catch(err => {
+                    showError("Error displaying book pages.");
+                });
+            } catch(err) {
+                showError("Error parsing ePub.");
+            }
+        }
+
+        prevBtn.addEventListener('click', (e) => { e.preventDefault(); rendition.prev(); closeBubble(); });
+        nextBtn.addEventListener('click', (e) => { e.preventDefault(); rendition.next(); closeBubble(); });
+        prevBtn.addEventListener('touchstart', (e) => { e.preventDefault(); rendition.prev(); closeBubble(); }, {passive: false});
+        nextBtn.addEventListener('touchstart', (e) => { e.preventDefault(); rendition.next(); closeBubble(); }, {passive: false});
 
         function setupInteractions() {
-            let tapTimer = null;
-            let lastTapTime = 0;
-
             rendition.hooks.content.register(function(contents) {
                 const iframeDoc = contents.document;
+                
+                let tapTimer = null;
+                let lastTapTime = 0;
+                let startX = 0;
+                let startY = 0;
+                let startTime = 0;
 
+                // 1. Record exactly where and when the finger touches down
+                iframeDoc.addEventListener('touchstart', (e) => {
+                    const touch = e.changedTouches[0];
+                    startX = touch.clientX;
+                    startY = touch.clientY;
+                    startTime = Date.now();
+                }, { passive: true });
+
+                // 2. Measure where and when the finger lifts up
                 iframeDoc.addEventListener('touchend', (e) => {
                     const touch = e.changedTouches[0];
+                    const endX = touch.clientX;
+                    const endY = touch.clientY;
+                    const endTime = Date.now();
 
-                    if (iframeDoc.caretRangeFromPoint) {
-                        const range = iframeDoc.caretRangeFromPoint(touch.clientX, touch.clientY);
-                        
-                        if (!range || range.startContainer.nodeType !== 3) {
-                            closeBubble();
-                            return;
-                        }
+                    // Calculate how far the finger moved, and how long it was on screen
+                    const distance = Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endY - startY, 2));
+                    const duration = endTime - startTime;
 
-                        const text = range.startContainer.nodeValue;
-                        const offset = range.startOffset;
-                        
-                        const isLetter = (char) => /[a-zA-ZåäöÅÄÖéÉ\-]/.test(char);
-                        if (!text[offset] || !isLetter(text[offset])) {
-                            closeBubble();
-                            return;
-                        }
-                        
-                        let start = offset;
-                        let end = offset;
-                        while (start > 0 && isLetter(text[start - 1])) start--;
-                        while (end < text.length && isLetter(text[end])) end++;
-                        
-                        const word = text.slice(start, end).trim();
-                        if (!word) return;
-
-                        const sentenceText = range.startContainer.parentNode.innerText || text;
-                        const sentence = extractSentence(sentenceText, word);
-
-                        const iframeRect = document.querySelector('#viewer iframe').getBoundingClientRect();
-                        const x = touch.clientX + iframeRect.left;
-                        const y = touch.clientY + iframeRect.top - 20;
-
-                        const currentTime = new Date().getTime();
-                        const tapLength = currentTime - lastTapTime;
-                        
-                        if (tapLength < 350 && tapLength > 0) {
-                            clearTimeout(tapTimer);
-                            handleTranslation(sentence, x, y, true);
-                            e.preventDefault(); 
-                        } else {
-                            tapTimer = setTimeout(() => {
-                                handleTranslation(word, x, y, false);
-                            }, 350);
-                        }
-                        lastTapTime = currentTime;
+                    // If they dragged their finger (distance > 10) or held it too long (duration > 300), ignore it!
+                    if (distance > 10 || duration > 300) {
+                        return; 
                     }
+
+                    if (!iframeDoc.caretRangeFromPoint) return;
+
+                    const range = iframeDoc.caretRangeFromPoint(endX, endY);
+                    if (!range || range.startContainer.nodeType !== 3) {
+                        closeBubble();
+                        return;
+                    }
+
+                    const text = range.startContainer.nodeValue;
+                    const offset = range.startOffset;
+                    
+                    const isLetter = (char) => /[a-zA-ZåäöÅÄÖéÉ\-]/.test(char);
+                    if (!text[offset] || !isLetter(text[offset])) {
+                        closeBubble();
+                        return;
+                    }
+                    
+                    let start = offset;
+                    let end = offset;
+                    while (start > 0 && isLetter(text[start - 1])) start--;
+                    while (end < text.length && isLetter(text[end])) end++;
+                    
+                    const word = text.slice(start, end).trim();
+                    if (!word) return;
+
+                    const sentenceText = range.startContainer.parentNode.innerText || text;
+                    const sentence = extractSentence(sentenceText, word);
+
+                    const iframeRect = document.querySelector('#viewer iframe').getBoundingClientRect();
+                    const absoluteX = endX + iframeRect.left;
+                    const absoluteY = endY + iframeRect.top - 20;
+
+                    const tapLength = endTime - lastTapTime;
+                    
+                    if (tapLength < 400 && tapLength > 0) {
+                        clearTimeout(tapTimer);
+                        handleTranslation(sentence, absoluteX, absoluteY, true);
+                    } else {
+                        tapTimer = setTimeout(() => {
+                            handleTranslation(word, absoluteX, absoluteY, false);
+                        }, 400);
+                    }
+                    lastTapTime = endTime;
                 });
             });
         }
