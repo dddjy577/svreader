@@ -13,10 +13,12 @@
     
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 0; background: #f4f4f9; overflow: hidden; }
-        #controls { padding: 20px; text-align: center; background: white; box-shadow: 0 2px 5px rgba(0,0,0,0.1); position: relative; z-index: 10; }
-        #viewer { width: 100vw; height: calc(100vh - 80px); background: white; }
+        #controls { padding: 20px; text-align: center; background: white; box-shadow: 0 2px 5px rgba(0,0,0,0.1); position: relative; z-index: 10; height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center;}
         
-        /* The Translation Bubble */
+        /* The Book Viewer */
+        #viewer { width: 100vw; height: 100vh; background: white; position: relative; }
+        
+        /* Translation Bubble */
         #translation-bubble {
             position: absolute;
             background: #2c3e50;
@@ -27,21 +29,24 @@
             font-weight: 500;
             pointer-events: none;
             opacity: 0;
+            visibility: hidden;
             transition: opacity 0.2s;
             z-index: 1000;
             box-shadow: 0 5px 15px rgba(0,0,0,0.3);
             max-width: 80vw;
             text-align: center;
         }
-        #translation-bubble.visible { opacity: 1; }
-        
-        /* Loading indicator inside bubble */
+        #translation-bubble.visible { opacity: 1; visibility: visible; }
         .loading { font-style: italic; color: #bdc3c7; }
+        
+        /* Styled Upload Button */
+        input[type="file"] { font-size: 16px; padding: 10px; }
     </style>
 </head>
 <body>
 
     <div id="controls">
+        <h2>📖 Open a Swedish Book</h2>
         <input type="file" id="book-upload" accept=".epub" />
     </div>
 
@@ -53,20 +58,19 @@
         const bubble = document.getElementById('translation-bubble');
         let book, rendition;
 
-        // 1. Handle File Upload
+        // 1. Load the Book File
         uploadInput.addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (window.FileReader) {
                 const reader = new FileReader();
                 reader.onload = function(event) {
-                    const arrayBuffer = event.target.result;
-                    loadBook(arrayBuffer);
+                    loadBook(event.target.result);
                 };
                 reader.readAsArrayBuffer(file);
             }
         });
 
-        // 2. Load the EPUB
+        // 2. Render Book in Page-by-Page Mode (Kindle style)
         function loadBook(bookData) {
             document.getElementById('viewer').innerHTML = '';
             book = ePub(bookData);
@@ -74,73 +78,125 @@
                 width: "100%",
                 height: "100%",
                 spread: "none",
-                manager: "continuous",
-                flow: "scrolled",
+                flow: "paginated", // This makes it page-by-page!
+                manager: "default"
             });
             rendition.display();
             setupInteractions();
             
-            // Hide controls after loading to give full screen to the book
             document.getElementById('controls').style.display = 'none';
-            document.getElementById('viewer').style.height = '100vh';
         }
 
-        // 3. Setup Touch/Click Logic
+        // 3. Handle Taps (Pages, Words, and Sentences)
         function setupInteractions() {
-            let clickTimer = null;
+            let tapTimer = null;
+            let lastTapTime = 0;
 
             rendition.hooks.content.register(function(contents) {
                 const iframeDoc = contents.document;
+                let touchStartX = 0;
+                let touchStartY = 0;
 
-                iframeDoc.addEventListener('click', (e) => {
-                    const selection = contents.window.getSelection();
-                    if (!selection || selection.isCollapsed) return;
+                iframeDoc.addEventListener('touchstart', (e) => {
+                    touchStartX = e.touches[0].clientX;
+                    touchStartY = e.touches[0].clientY;
+                });
 
-                    const text = selection.toString().trim();
-                    if (!text) return;
-
-                    // Get coordinates to place the bubble
-                    const range = selection.getRangeAt(0);
-                    const rect = range.getBoundingClientRect();
-                    const iframeRect = document.querySelector('#viewer iframe').getBoundingClientRect();
+                iframeDoc.addEventListener('touchend', (e) => {
+                    const touch = e.changedTouches[0];
+                    const distance = Math.sqrt(Math.pow(touch.clientX - touchStartX, 2) + Math.pow(touch.clientY - touchStartY, 2));
                     
-                    const x = rect.left + iframeRect.left + (rect.width / 2);
-                    const y = rect.top + iframeRect.top - 15;
+                    // If user is swiping, ignore
+                    if (distance > 10) return; 
 
-                    if (clickTimer == null) {
-                        // First Tap
-                        clickTimer = setTimeout(() => {
-                            clickTimer = null;
-                            handleTranslation(text, x, y, false);
-                        }, 300); // Wait 300ms to see if user taps again
-                    } else {
-                        // Second Tap (Double Tap)
-                        clearTimeout(clickTimer);
-                        clickTimer = null;
+                    const screenWidth = contents.window.innerWidth;
+                    
+                    // -- PAGE TURNING LOGIC --
+                    // Tap left 20% of screen = Previous Page
+                    if (touch.clientX < screenWidth * 0.2) {
+                        rendition.prev();
+                        closeBubble();
+                        return;
+                    }
+                    // Tap right 20% of screen = Next Page
+                    if (touch.clientX > screenWidth * 0.8) {
+                        rendition.next();
+                        closeBubble();
+                        return;
+                    }
+
+                    // -- WORD SELECTION LOGIC (Middle 60% of screen) --
+                    if (iframeDoc.caretRangeFromPoint) {
+                        const range = iframeDoc.caretRangeFromPoint(touch.clientX, touch.clientY);
                         
-                        const paragraphText = selection.anchorNode.parentNode.innerText || "";
-                        const sentence = extractSentence(paragraphText, text);
-                        handleTranslation(sentence, x, y, true);
+                        // If they tapped blank space or image, just close bubble and stop
+                        if (!range || range.startContainer.nodeType !== 3) {
+                            closeBubble();
+                            return;
+                        }
+
+                        const text = range.startContainer.nodeValue;
+                        const offset = range.startOffset;
+                        
+                        // Check if tapped on actual letters (Swedish alphabet included)
+                        const isLetter = (char) => /[a-zA-ZåäöÅÄÖéÉ\-]/.test(char);
+                        if (!text[offset] || !isLetter(text[offset])) {
+                            closeBubble();
+                            return;
+                        }
+                        
+                        // Extract the exact word
+                        let start = offset;
+                        let end = offset;
+                        while (start > 0 && isLetter(text[start - 1])) start--;
+                        while (end < text.length && isLetter(text[end])) end++;
+                        
+                        const word = text.slice(start, end).trim();
+                        if (!word) return;
+
+                        // Extract the full sentence
+                        const sentenceText = range.startContainer.parentNode.innerText || text;
+                        const sentence = extractSentence(sentenceText, word);
+
+                        // Find bubble coordinates
+                        const iframeRect = document.querySelector('#viewer iframe').getBoundingClientRect();
+                        const x = touch.clientX + iframeRect.left;
+                        const y = touch.clientY + iframeRect.top - 20;
+
+                        // -- SINGLE VS DOUBLE TAP TIMING --
+                        const currentTime = new Date().getTime();
+                        const tapLength = currentTime - lastTapTime;
+                        
+                        if (tapLength < 350 && tapLength > 0) {
+                            // It's a Double Tap! (Translate Sentence)
+                            clearTimeout(tapTimer);
+                            handleTranslation(sentence, x, y, true);
+                            e.preventDefault(); 
+                        } else {
+                            // It's a Single Tap! (Translate Word)
+                            // We wait 350ms to see if they tap again before translating
+                            tapTimer = setTimeout(() => {
+                                handleTranslation(word, x, y, false);
+                            }, 350);
+                        }
+                        lastTapTime = currentTime;
                     }
                 });
             });
         }
 
-        // 4. Fetch Translation from Free API
+        // 4. Fetch Translation
         async function handleTranslation(textToTranslate, x, y, isSentence) {
-            // Show bubble immediately with loading state
-            showBubble("<span class='loading'>Translating...</span>", x, y);
+            // Add prefix so you know if it grabbed the word or sentence
+            const prefix = isSentence ? "📝 " : "🔍 ";
+            showBubble(`${prefix}<span class='loading'>Translating...</span>`, x, y);
 
             try {
-                // Free MyMemory Translation API (Swedish to English)
                 const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(textToTranslate)}&langpair=sv|en`;
                 const response = await fetch(url);
                 const data = await response.json();
                 
-                let translatedText = data.responseData.translatedText;
-                
-                // Show final translation
-                showBubble(translatedText, x, y);
+                showBubble(`${prefix}${data.responseData.translatedText}`, x, y);
             } catch (error) {
                 showBubble("Translation failed. Check internet.", x, y);
             }
@@ -149,17 +205,24 @@
         // 5. Bubble UI & Text Helpers
         function showBubble(htmlText, x, y) {
             bubble.innerHTML = htmlText;
-            bubble.style.left = `${x}px`;
+            
+            // Keep bubble from going off screen
+            let safeX = x;
+            if (safeX < 120) safeX = 120;
+            if (safeX > window.innerWidth - 120) safeX = window.innerWidth - 120;
+
+            bubble.style.left = `${safeX}px`;
             bubble.style.top = `${y}px`;
             bubble.style.transform = 'translate(-50%, -100%)';
             bubble.classList.add('visible');
+        }
 
-            // Hide after 4 seconds
-            setTimeout(() => { bubble.classList.remove('visible'); }, 4000);
+        function closeBubble() {
+            bubble.classList.remove('visible');
         }
 
         function extractSentence(paragraph, word) {
-            // Split by periods, exclamation marks, or question marks
+            // Better sentence splitting matching punctuation
             const sentences = paragraph.match(/[^.!?]+[.!?]+/g) || [paragraph];
             const found = sentences.find(s => s.includes(word));
             return found ? found.trim() : word;
@@ -167,3 +230,4 @@
     </script>
 </body>
 </html>
+
