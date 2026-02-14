@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="SV-EN Reader">
+    <title>Swedish Reader</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
+    
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 0; background: #f4f4f9; overflow: hidden; }
+        #controls { padding: 20px; text-align: center; background: white; box-shadow: 0 2px 5px rgba(0,0,0,0.1); position: relative; z-index: 10; }
+        #viewer { width: 100vw; height: calc(100vh - 80px); background: white; }
+        
+        /* The Translation Bubble */
+        #translation-bubble {
+            position: absolute;
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 12px 16px;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 500;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+            z-index: 1000;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            max-width: 80vw;
+            text-align: center;
+        }
+        #translation-bubble.visible { opacity: 1; }
+        
+        /* Loading indicator inside bubble */
+        .loading { font-style: italic; color: #bdc3c7; }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <input type="file" id="book-upload" accept=".epub" />
+    </div>
+
+    <div id="viewer"></div>
+    <div id="translation-bubble"></div>
+
+    <script>
+        const uploadInput = document.getElementById('book-upload');
+        const bubble = document.getElementById('translation-bubble');
+        let book, rendition;
+
+        // 1. Handle File Upload
+        uploadInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (window.FileReader) {
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    const arrayBuffer = event.target.result;
+                    loadBook(arrayBuffer);
+                };
+                reader.readAsArrayBuffer(file);
+            }
+        });
+
+        // 2. Load the EPUB
+        function loadBook(bookData) {
+            document.getElementById('viewer').innerHTML = '';
+            book = ePub(bookData);
+            rendition = book.renderTo("viewer", {
+                width: "100%",
+                height: "100%",
+                spread: "none",
+                manager: "continuous",
+                flow: "scrolled",
+            });
+            rendition.display();
+            setupInteractions();
+            
+            // Hide controls after loading to give full screen to the book
+            document.getElementById('controls').style.display = 'none';
+            document.getElementById('viewer').style.height = '100vh';
+        }
+
+        // 3. Setup Touch/Click Logic
+        function setupInteractions() {
+            let clickTimer = null;
+
+            rendition.hooks.content.register(function(contents) {
+                const iframeDoc = contents.document;
+
+                iframeDoc.addEventListener('click', (e) => {
+                    const selection = contents.window.getSelection();
+                    if (!selection || selection.isCollapsed) return;
+
+                    const text = selection.toString().trim();
+                    if (!text) return;
+
+                    // Get coordinates to place the bubble
+                    const range = selection.getRangeAt(0);
+                    const rect = range.getBoundingClientRect();
+                    const iframeRect = document.querySelector('#viewer iframe').getBoundingClientRect();
+                    
+                    const x = rect.left + iframeRect.left + (rect.width / 2);
+                    const y = rect.top + iframeRect.top - 15;
+
+                    if (clickTimer == null) {
+                        // First Tap
+                        clickTimer = setTimeout(() => {
+                            clickTimer = null;
+                            handleTranslation(text, x, y, false);
+                        }, 300); // Wait 300ms to see if user taps again
+                    } else {
+                        // Second Tap (Double Tap)
+                        clearTimeout(clickTimer);
+                        clickTimer = null;
+                        
+                        const paragraphText = selection.anchorNode.parentNode.innerText || "";
+                        const sentence = extractSentence(paragraphText, text);
+                        handleTranslation(sentence, x, y, true);
+                    }
+                });
+            });
+        }
+
+        // 4. Fetch Translation from Free API
+        async function handleTranslation(textToTranslate, x, y, isSentence) {
+            // Show bubble immediately with loading state
+            showBubble("<span class='loading'>Translating...</span>", x, y);
+
+            try {
+                // Free MyMemory Translation API (Swedish to English)
+                const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(textToTranslate)}&langpair=sv|en`;
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                let translatedText = data.responseData.translatedText;
+                
+                // Show final translation
+                showBubble(translatedText, x, y);
+            } catch (error) {
+                showBubble("Translation failed. Check internet.", x, y);
+            }
+        }
+
+        // 5. Bubble UI & Text Helpers
+        function showBubble(htmlText, x, y) {
+            bubble.innerHTML = htmlText;
+            bubble.style.left = `${x}px`;
+            bubble.style.top = `${y}px`;
+            bubble.style.transform = 'translate(-50%, -100%)';
+            bubble.classList.add('visible');
+
+            // Hide after 4 seconds
+            setTimeout(() => { bubble.classList.remove('visible'); }, 4000);
+        }
+
+        function extractSentence(paragraph, word) {
+            // Split by periods, exclamation marks, or question marks
+            const sentences = paragraph.match(/[^.!?]+[.!?]+/g) || [paragraph];
+            const found = sentences.find(s => s.includes(word));
+            return found ? found.trim() : word;
+        }
+    </script>
+</body>
+</html>
