@@ -83,7 +83,7 @@
 <body>
 
     <div id="controls">
-        <h2 id="title-text">📖 Swedish Reader (v8)</h2>
+        <h2 id="title-text">📖 Swedish Reader (v9)</h2>
         <input type="file" id="book-upload" accept=".epub" />
         <div id="error-msg"></div>
     </div>
@@ -124,7 +124,7 @@
         });
 
         function showError(msg) {
-            titleText.innerText = "📖 Swedish Reader (v8)";
+            titleText.innerText = "📖 Swedish Reader (v9)";
             uploadInput.style.display = 'block';
             errorMsg.innerText = "❌ " + msg;
             errorMsg.style.display = 'block';
@@ -163,48 +163,45 @@
             rendition.hooks.content.register(function(contents) {
                 const iframeDoc = contents.document;
                 
+                // --- THE MAGIC FIX FOR IOS CHROME ---
+                // Trick iOS into thinking every word is a clickable button
+                const style = iframeDoc.createElement('style');
+                style.innerHTML = 'body { cursor: pointer; -webkit-tap-highlight-color: transparent; }';
+                iframeDoc.head.appendChild(style);
+
                 let tapTimer = null;
                 let lastTapTime = 0;
-                let startX = 0;
-                let startY = 0;
-                let startTime = 0;
 
-                // 1. Record exactly where and when the finger touches down
-                iframeDoc.addEventListener('touchstart', (e) => {
-                    const touch = e.changedTouches[0];
-                    startX = touch.clientX;
-                    startY = touch.clientY;
-                    startTime = Date.now();
-                }, { passive: true });
+                iframeDoc.addEventListener('click', (e) => {
+                    const x = e.clientX;
+                    const y = e.clientY;
 
-                // 2. Measure where and when the finger lifts up
-                iframeDoc.addEventListener('touchend', (e) => {
-                    const touch = e.changedTouches[0];
-                    const endX = touch.clientX;
-                    const endY = touch.clientY;
-                    const endTime = Date.now();
+                    let textNode = null;
+                    let offset = 0;
 
-                    // Calculate how far the finger moved, and how long it was on screen
-                    const distance = Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endY - startY, 2));
-                    const duration = endTime - startTime;
-
-                    // If they dragged their finger (distance > 10) or held it too long (duration > 300), ignore it!
-                    if (distance > 10 || duration > 300) {
-                        return; 
+                    // Bulletproof cross-browser point checking
+                    if (iframeDoc.caretRangeFromPoint) {
+                        const range = iframeDoc.caretRangeFromPoint(x, y);
+                        if (range) {
+                            textNode = range.startContainer;
+                            offset = range.startOffset;
+                        }
+                    } else if (iframeDoc.caretPositionFromPoint) {
+                        const pos = iframeDoc.caretPositionFromPoint(x, y);
+                        if (pos) {
+                            textNode = pos.offsetNode;
+                            offset = pos.offset;
+                        }
                     }
 
-                    if (!iframeDoc.caretRangeFromPoint) return;
-
-                    const range = iframeDoc.caretRangeFromPoint(endX, endY);
-                    if (!range || range.startContainer.nodeType !== 3) {
+                    if (!textNode || textNode.nodeType !== 3) {
                         closeBubble();
                         return;
                     }
 
-                    const text = range.startContainer.nodeValue;
-                    const offset = range.startOffset;
-                    
+                    const text = textNode.nodeValue;
                     const isLetter = (char) => /[a-zA-ZåäöÅÄÖéÉ\-]/.test(char);
+                    
                     if (!text[offset] || !isLetter(text[offset])) {
                         closeBubble();
                         return;
@@ -218,14 +215,15 @@
                     const word = text.slice(start, end).trim();
                     if (!word) return;
 
-                    const sentenceText = range.startContainer.parentNode.innerText || text;
+                    const sentenceText = textNode.parentNode.innerText || text;
                     const sentence = extractSentence(sentenceText, word);
 
                     const iframeRect = document.querySelector('#viewer iframe').getBoundingClientRect();
-                    const absoluteX = endX + iframeRect.left;
-                    const absoluteY = endY + iframeRect.top - 20;
+                    const absoluteX = x + iframeRect.left;
+                    const absoluteY = y + iframeRect.top - 20;
 
-                    const tapLength = endTime - lastTapTime;
+                    const currentTime = new Date().getTime();
+                    const tapLength = currentTime - lastTapTime;
                     
                     if (tapLength < 400 && tapLength > 0) {
                         clearTimeout(tapTimer);
@@ -235,7 +233,7 @@
                             handleTranslation(word, absoluteX, absoluteY, false);
                         }, 400);
                     }
-                    lastTapTime = endTime;
+                    lastTapTime = currentTime;
                 });
             });
         }
