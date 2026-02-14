@@ -83,7 +83,7 @@
 <body>
 
     <div id="controls">
-        <h2 id="title-text">📖 Swedish Reader (v9)</h2>
+        <h2 id="title-text">📖 Swedish Reader (v10)</h2>
         <input type="file" id="book-upload" accept=".epub" />
         <div id="error-msg"></div>
     </div>
@@ -124,7 +124,7 @@
         });
 
         function showError(msg) {
-            titleText.innerText = "📖 Swedish Reader (v9)";
+            titleText.innerText = "📖 Swedish Reader (v10)";
             uploadInput.style.display = 'block';
             errorMsg.innerText = "❌ " + msg;
             errorMsg.style.display = 'block';
@@ -163,8 +163,6 @@
             rendition.hooks.content.register(function(contents) {
                 const iframeDoc = contents.document;
                 
-                // --- THE MAGIC FIX FOR IOS CHROME ---
-                // Trick iOS into thinking every word is a clickable button
                 const style = iframeDoc.createElement('style');
                 style.innerHTML = 'body { cursor: pointer; -webkit-tap-highlight-color: transparent; }';
                 iframeDoc.head.appendChild(style);
@@ -179,7 +177,6 @@
                     let textNode = null;
                     let offset = 0;
 
-                    // Bulletproof cross-browser point checking
                     if (iframeDoc.caretRangeFromPoint) {
                         const range = iframeDoc.caretRangeFromPoint(x, y);
                         if (range) {
@@ -238,17 +235,40 @@
             });
         }
 
+        // --- NEW: LIBRETRANSLATE API ---
         async function handleTranslation(textToTranslate, x, y, isSentence) {
             const prefix = isSentence ? "📝 " : "🔍 ";
             showBubble(`${prefix}<span class='loading'>Translating...</span>`, x, y);
 
             try {
-                const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(textToTranslate)}&langpair=sv|en`;
-                const response = await fetch(url);
+                // Using a known public LibreTranslate instance
+                const response = await fetch('https://translate.argosopentech.com/translate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        q: textToTranslate,
+                        source: 'sv',
+                        target: 'en',
+                        format: 'text'
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error("API failed");
+                }
+
                 const data = await response.json();
-                showBubble(`${prefix}${data.responseData.translatedText}`, x, y);
+                
+                // LibreTranslate returns translated text in data.translatedText
+                if (data && data.translatedText) {
+                    showBubble(`${prefix}${data.translatedText}`, x, y);
+                } else {
+                    throw new Error("No text returned");
+                }
+
             } catch (error) {
-                showBubble("Translation failed.", x, y);
+                // If it fails, you will see this explicit message!
+                showBubble("⚠️ API Error! Taps work, but translation server is busy.", x, y);
             }
         }
 
@@ -275,3 +295,4 @@
     </script>
 </body>
 </html>
+
