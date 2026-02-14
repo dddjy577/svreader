@@ -88,54 +88,53 @@
                 let touchStartY = 0;
                 let touchStartTime = 0;
 
-                // Stop Apple from trying to scroll the page natively
+                // Stop iOS from trying to "drag" cover images
+                iframeDoc.body.style.WebkitUserSelect = 'none';
+                iframeDoc.body.style.WebkitUserDrag = 'none';
                 iframeDoc.body.style.touchAction = 'none';
 
                 iframeDoc.addEventListener('touchstart', (e) => {
-                    touchStartX = e.touches[0].clientX;
-                    touchStartY = e.touches[0].clientY;
+                    touchStartX = e.changedTouches[0].screenX;
+                    touchStartY = e.changedTouches[0].screenY;
                     touchStartTime = new Date().getTime();
                 });
 
                 iframeDoc.addEventListener('touchend', (e) => {
                     const touch = e.changedTouches[0];
-                    const distanceX = touch.clientX - touchStartX;
-                    const distanceY = touch.clientY - touchStartY;
+                    const distanceX = touch.screenX - touchStartX;
+                    const distanceY = touch.screenY - touchStartY;
                     const distance = Math.sqrt(distanceX * distanceX + distanceY * distanceY);
                     const timeElapsed = new Date().getTime() - touchStartTime;
                     
                     const screenWidth = contents.window.innerWidth;
 
-                    // -- 1. SWIPE TO TURN PAGE --
-                    // If swiped left or right rapidly
-                    if (Math.abs(distanceX) > 40 && Math.abs(distanceY) < 50 && timeElapsed < 500) {
+                    // -- 1. SWIPE TO TURN PAGE (Rubbing finger left/right) --
+                    if (Math.abs(distanceX) > 30 && Math.abs(distanceY) < 80 && timeElapsed < 800) {
                         if (distanceX < 0) {
-                            rendition.next(); // Swipe Left = Next Page
+                            rendition.next(); // Swipe Left (Next Page)
                         } else {
-                            rendition.prev(); // Swipe Right = Previous Page
+                            rendition.prev(); // Swipe Right (Previous Page)
                         }
                         closeBubble();
                         return;
                     }
 
-                    // If user is just lazily dragging their finger, ignore
-                    if (distance > 10) return; 
+                    // Ignore if they just lazily dragged their finger around
+                    if (distance > 15) return; 
 
-                    // -- 2. TAP TO TURN PAGE --
-                    // Tap left 30% of screen
+                    // -- 2. TAP EDGE TO TURN PAGE --
                     if (touch.clientX < screenWidth * 0.3) {
                         rendition.prev();
                         closeBubble();
                         return;
                     }
-                    // Tap right 30% of screen
                     if (touch.clientX > screenWidth * 0.7) {
                         rendition.next();
                         closeBubble();
                         return;
                     }
 
-                    // -- 3. WORD SELECTION (Middle 40% of screen) --
+                    // -- 3. WORD TRANSLATION --
                     if (iframeDoc.caretRangeFromPoint) {
                         const range = iframeDoc.caretRangeFromPoint(touch.clientX, touch.clientY);
                         
@@ -196,7 +195,7 @@
                 const data = await response.json();
                 showBubble(`${prefix}${data.responseData.translatedText}`, x, y);
             } catch (error) {
-                showBubble("Translation failed. Check internet.", x, y);
+                showBubble("Translation failed.", x, y);
             }
         }
 
