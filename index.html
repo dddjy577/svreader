@@ -12,13 +12,10 @@
     <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
     
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 0; background: #f4f4f9; overflow: hidden; }
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 0; background: #f4f4f9; overflow: hidden; touch-action: none; }
         #controls { padding: 20px; text-align: center; background: white; box-shadow: 0 2px 5px rgba(0,0,0,0.1); position: relative; z-index: 10; height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center;}
+        #viewer { width: 100vw; height: 100vh; background: white; position: relative; overflow: hidden; }
         
-        /* The Book Viewer */
-        #viewer { width: 100vw; height: 100vh; background: white; position: relative; }
-        
-        /* Translation Bubble */
         #translation-bubble {
             position: absolute;
             background: #2c3e50;
@@ -38,8 +35,6 @@
         }
         #translation-bubble.visible { opacity: 1; visibility: visible; }
         .loading { font-style: italic; color: #bdc3c7; }
-        
-        /* Styled Upload Button */
         input[type="file"] { font-size: 16px; padding: 10px; }
     </style>
 </head>
@@ -58,19 +53,15 @@
         const bubble = document.getElementById('translation-bubble');
         let book, rendition;
 
-        // 1. Load the Book File
         uploadInput.addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (window.FileReader) {
                 const reader = new FileReader();
-                reader.onload = function(event) {
-                    loadBook(event.target.result);
-                };
+                reader.onload = function(event) { loadBook(event.target.result); };
                 reader.readAsArrayBuffer(file);
             }
         });
 
-        // 2. Render Book in Page-by-Page Mode (Kindle style)
         function loadBook(bookData) {
             document.getElementById('viewer').innerHTML = '';
             book = ePub(bookData);
@@ -78,7 +69,7 @@
                 width: "100%",
                 height: "100%",
                 spread: "none",
-                flow: "paginated", // This makes it page-by-page!
+                flow: "paginated",
                 manager: "default"
             });
             rendition.display();
@@ -87,7 +78,6 @@
             document.getElementById('controls').style.display = 'none';
         }
 
-        // 3. Handle Taps (Pages, Words, and Sentences)
         function setupInteractions() {
             let tapTimer = null;
             let lastTapTime = 0;
@@ -96,40 +86,59 @@
                 const iframeDoc = contents.document;
                 let touchStartX = 0;
                 let touchStartY = 0;
+                let touchStartTime = 0;
+
+                // Stop Apple from trying to scroll the page natively
+                iframeDoc.body.style.touchAction = 'none';
 
                 iframeDoc.addEventListener('touchstart', (e) => {
                     touchStartX = e.touches[0].clientX;
                     touchStartY = e.touches[0].clientY;
+                    touchStartTime = new Date().getTime();
                 });
 
                 iframeDoc.addEventListener('touchend', (e) => {
                     const touch = e.changedTouches[0];
-                    const distance = Math.sqrt(Math.pow(touch.clientX - touchStartX, 2) + Math.pow(touch.clientY - touchStartY, 2));
+                    const distanceX = touch.clientX - touchStartX;
+                    const distanceY = touch.clientY - touchStartY;
+                    const distance = Math.sqrt(distanceX * distanceX + distanceY * distanceY);
+                    const timeElapsed = new Date().getTime() - touchStartTime;
                     
-                    // If user is swiping, ignore
+                    const screenWidth = contents.window.innerWidth;
+
+                    // -- 1. SWIPE TO TURN PAGE --
+                    // If swiped left or right rapidly
+                    if (Math.abs(distanceX) > 40 && Math.abs(distanceY) < 50 && timeElapsed < 500) {
+                        if (distanceX < 0) {
+                            rendition.next(); // Swipe Left = Next Page
+                        } else {
+                            rendition.prev(); // Swipe Right = Previous Page
+                        }
+                        closeBubble();
+                        return;
+                    }
+
+                    // If user is just lazily dragging their finger, ignore
                     if (distance > 10) return; 
 
-                    const screenWidth = contents.window.innerWidth;
-                    
-                    // -- PAGE TURNING LOGIC --
-                    // Tap left 20% of screen = Previous Page
-                    if (touch.clientX < screenWidth * 0.2) {
+                    // -- 2. TAP TO TURN PAGE --
+                    // Tap left 30% of screen
+                    if (touch.clientX < screenWidth * 0.3) {
                         rendition.prev();
                         closeBubble();
                         return;
                     }
-                    // Tap right 20% of screen = Next Page
-                    if (touch.clientX > screenWidth * 0.8) {
+                    // Tap right 30% of screen
+                    if (touch.clientX > screenWidth * 0.7) {
                         rendition.next();
                         closeBubble();
                         return;
                     }
 
-                    // -- WORD SELECTION LOGIC (Middle 60% of screen) --
+                    // -- 3. WORD SELECTION (Middle 40% of screen) --
                     if (iframeDoc.caretRangeFromPoint) {
                         const range = iframeDoc.caretRangeFromPoint(touch.clientX, touch.clientY);
                         
-                        // If they tapped blank space or image, just close bubble and stop
                         if (!range || range.startContainer.nodeType !== 3) {
                             closeBubble();
                             return;
@@ -138,14 +147,12 @@
                         const text = range.startContainer.nodeValue;
                         const offset = range.startOffset;
                         
-                        // Check if tapped on actual letters (Swedish alphabet included)
                         const isLetter = (char) => /[a-zA-ZåäöÅÄÖéÉ\-]/.test(char);
                         if (!text[offset] || !isLetter(text[offset])) {
                             closeBubble();
                             return;
                         }
                         
-                        // Extract the exact word
                         let start = offset;
                         let end = offset;
                         while (start > 0 && isLetter(text[start - 1])) start--;
@@ -154,27 +161,21 @@
                         const word = text.slice(start, end).trim();
                         if (!word) return;
 
-                        // Extract the full sentence
                         const sentenceText = range.startContainer.parentNode.innerText || text;
                         const sentence = extractSentence(sentenceText, word);
 
-                        // Find bubble coordinates
                         const iframeRect = document.querySelector('#viewer iframe').getBoundingClientRect();
                         const x = touch.clientX + iframeRect.left;
                         const y = touch.clientY + iframeRect.top - 20;
 
-                        // -- SINGLE VS DOUBLE TAP TIMING --
                         const currentTime = new Date().getTime();
                         const tapLength = currentTime - lastTapTime;
                         
                         if (tapLength < 350 && tapLength > 0) {
-                            // It's a Double Tap! (Translate Sentence)
                             clearTimeout(tapTimer);
                             handleTranslation(sentence, x, y, true);
                             e.preventDefault(); 
                         } else {
-                            // It's a Single Tap! (Translate Word)
-                            // We wait 350ms to see if they tap again before translating
                             tapTimer = setTimeout(() => {
                                 handleTranslation(word, x, y, false);
                             }, 350);
@@ -185,9 +186,7 @@
             });
         }
 
-        // 4. Fetch Translation
         async function handleTranslation(textToTranslate, x, y, isSentence) {
-            // Add prefix so you know if it grabbed the word or sentence
             const prefix = isSentence ? "📝 " : "🔍 ";
             showBubble(`${prefix}<span class='loading'>Translating...</span>`, x, y);
 
@@ -195,22 +194,17 @@
                 const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(textToTranslate)}&langpair=sv|en`;
                 const response = await fetch(url);
                 const data = await response.json();
-                
                 showBubble(`${prefix}${data.responseData.translatedText}`, x, y);
             } catch (error) {
                 showBubble("Translation failed. Check internet.", x, y);
             }
         }
 
-        // 5. Bubble UI & Text Helpers
         function showBubble(htmlText, x, y) {
             bubble.innerHTML = htmlText;
-            
-            // Keep bubble from going off screen
             let safeX = x;
             if (safeX < 120) safeX = 120;
             if (safeX > window.innerWidth - 120) safeX = window.innerWidth - 120;
-
             bubble.style.left = `${safeX}px`;
             bubble.style.top = `${y}px`;
             bubble.style.transform = 'translate(-50%, -100%)';
@@ -222,7 +216,6 @@
         }
 
         function extractSentence(paragraph, word) {
-            // Better sentence splitting matching punctuation
             const sentences = paragraph.match(/[^.!?]+[.!?]+/g) || [paragraph];
             const found = sentences.find(s => s.includes(word));
             return found ? found.trim() : word;
@@ -230,4 +223,3 @@
     </script>
 </body>
 </html>
-
